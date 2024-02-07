@@ -5,6 +5,7 @@ description = "Telegram mtproto mitm server."
 authors = ["RuslanUC <dev_ruslan_uc@protonmail.com>"]
 readme = "README.md"
 packages = [{include = "mtproto_mitm"}]
+include = ["mtproto_mitm/**/*.py"]
 
 [tool.poetry.dependencies]
 python = "^3.11"
