@@ -1,0 +1,12 @@
+from __future__ import annotations
+
+from mtproto_mitm.tl.core_types import *
+from mtproto_mitm.tl.tl_object import TLObject, tl_object, TLField
+from typing import Optional, Any
+
+{warning}
+
+
+@tl_object(id={id}, name="{qualname}")
+class {name}(TLObject):
+    {fields}
