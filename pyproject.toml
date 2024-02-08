@@ -11,6 +11,7 @@ include = ["mtproto_mitm/**/*.py"]
 python = "^3.11"
 pysocks5server = "^0.1.0"
 tgcrypto = "^1.2.5"
+click = "^8.1.7"
 
 
 [build-system]

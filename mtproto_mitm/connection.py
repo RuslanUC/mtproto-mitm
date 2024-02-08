@@ -16,12 +16,13 @@ class PeekBytesIO(BytesIO):
 
 
 class Obfuscation:
-    def __init__(self, encrypt, decrypt):
+    def __init__(self, encrypt, decrypt, from_server: bool = False):
         self._encrypt = encrypt
         self._decrypt = decrypt
+        self._server = from_server
 
     def read(self, buf: BytesIO | Buffer, __size=...):
-        return tgcrypto.ctr256_decrypt(buf.read(__size), *self._encrypt)
+        return tgcrypto.ctr256_decrypt(buf.read(__size), *(self._decrypt if self._server else self._encrypt))
 
 
 class Buffer:
@@ -90,10 +91,11 @@ class Connection(ABC):
             header = decrypted[56:56 + 4]
 
             obf = Obfuscation(encrypt, decrypt)
+            obf_srv = Obfuscation(encrypt, decrypt, True)
             if header == b"\xef\xef\xef\xef":
-                return TCPAbridged(obf), TCPAbridged(obf)
+                return TCPAbridged(obf_srv), TCPAbridged(obf)
             elif header in {b"\xee\xee\xee\xee", b"\xdd\xdd\xdd\xdd"}:
-                return TCPIntermediate(obf), TCPIntermediate(obf)
+                return TCPIntermediate(obf_srv), TCPIntermediate(obf)
 
         assert False, f"Transport is unknown, aborting... (header: {header})"
 
