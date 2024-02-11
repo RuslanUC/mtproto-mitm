@@ -1,4 +1,9 @@
-from asyncio import get_event_loop
+import json
+from asyncio import get_event_loop, gather
+from base64 import b64encode
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from time import time
 
 import click
 from socks5server import DataDirection, SocksServer, PasswordAuthentication, Socks5Client
@@ -7,12 +12,23 @@ from mtproto_mitm.connection import PeekBytesIO, Connection
 from mtproto_mitm.protocol import MTProto, MessageContainer
 
 
+class JsonEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, bytes):
+            return obj.hex()
+        elif isinstance(obj, int) and obj > 2 ** 53 - 1:
+            return str(obj)
+        return super().default(obj)
+
+
 class MitmServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 1080, no_auth: bool = False, quiet: bool = False):
+    def __init__(self, host: str = "0.0.0.0", port: int = 1080, no_auth: bool = False, quiet: bool = False,
+                 output_dir: Path | None = None):
         self._server = SocksServer(host, port, no_auth)
         self._clients: dict[Socks5Client, tuple[Connection, Connection]] = {}
         self._sessions: dict[Socks5Client, list[MessageContainer]] = {}
         self._quiet = quiet
+        self._output_dir = output_dir
 
         self._server.on_client_disconnected(self._on_disconnect)
         self._server.on_data(self._on_data)
@@ -65,26 +81,56 @@ class MitmServer:
             if not self._quiet:
                 print(f" <- {obj}")
 
-    async def run(self):
+        del self._clients[client]
+        await self._save(client)
+
+    async def run_async(self):
         await self._server.serve()
 
+    def _sync_save(self, messages: list[MessageContainer] | None):
+        if messages is None:
+            return
 
-async def _main(host: str, port: int, key: list[str], keys_file: str, quiet: bool, output: str, proxy_no_auth: bool,
-                proxy_user: list[str]):
-    for k in key:
-        MTProto.register_key(bytes.fromhex(k))
+        messages_json = []
+        for message in messages:
+            messages_json.append({
+                "metadata": {
+                    "auth_key_id": message.meta.auth_key_id,
+                    "message_id": message.meta.message_id,
+                    "session_id": message.meta.session_id,
+                    "salt": message.meta.salt,
+                    "seq_no": message.meta.seq_no,
+                    "msg_key": message.meta.msg_key,
+                },
+                "object": message.obj.to_dict() if message.obj is not None else None,
+                "raw_data": b64encode(message.raw_data) if message.raw_data is not None else None,
+            })
 
-    if keys_file:
-        with open(keys_file) as f:
-            keys = f.read().splitlines()
-        for k in keys:
-            MTProto.register_key(bytes.fromhex(k))
+        sid = hex(messages_json[-1]["metadata"]["session_id"] or 0)[2:6] if messages_json else "0000"
+        with open(self._output_dir / f"{int(time()*1000)}_{sid}.json", "w") as f:
+            json.dump(messages_json, f, cls=JsonEncoder, indent=2)
 
-    server = MitmServer(host, port, proxy_no_auth, quiet)
-    if proxy_user:
-        server.set_proxy_users({login: password for user in proxy_user for login, password in [user.split(":")]})
+    async def _save(self, client: Socks5Client):
+        if not self._output_dir:
+            return
 
-    await server.run()
+        with ThreadPoolExecutor() as pool:
+            await get_event_loop().run_in_executor(pool, lambda: self._sync_save(self._sessions.pop(client, None)))
+
+    def run(self):
+        try:
+            get_event_loop().run_until_complete(self.run_async())
+        except KeyboardInterrupt:
+            pass
+
+        if not self._output_dir:
+            return
+
+        if not self._quiet:
+            print("Saving sessions...")
+
+        for client in list(self._sessions.keys()):
+            self._sync_save(self._sessions.pop(client, None))
 
 
 @click.command()
@@ -97,11 +143,25 @@ async def _main(host: str, port: int, key: list[str], keys_file: str, quiet: boo
               help="Directory to which mtproto requests will be saved.")
 @click.option("--proxy-no-auth", is_flag=True, default=False, help="Disable authentication for proxy.")
 @click.option("--proxy-user", type=click.STRING, multiple=True, help="Proxy user in login:password format.")
-def main(host: str, port: int, key: list[str], keys_file: str, quiet: bool, output: str, proxy_no_auth: bool,
+def main(host: str, port: int, key: list[str], keys_file: str, quiet: bool, output: str | None, proxy_no_auth: bool,
          proxy_user: list[str]):
     if not quiet:
         print("Running...")
-    get_event_loop().run_until_complete(_main(host, port, key, keys_file, quiet, output, proxy_no_auth, proxy_user))
+
+    for k in key:
+        MTProto.register_key(bytes.fromhex(k))
+
+    if keys_file:
+        with open(keys_file) as f:
+            keys = f.read().splitlines()
+        for k in keys:
+            MTProto.register_key(bytes.fromhex(k))
+
+    server = MitmServer(host, port, proxy_no_auth, quiet, Path(output) if output is not None else None)
+    if proxy_user:
+        server.set_proxy_users({login: password for user in proxy_user for login, password in [user.split(":")]})
+
+    server.run()
 
 
 if __name__ == "__main__":

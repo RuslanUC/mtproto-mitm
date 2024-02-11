@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mtproto-mitm"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Telegram mtproto mitm server."
 authors = ["RuslanUC <dev_ruslan_uc@protonmail.com>"]
 readme = "README.md"

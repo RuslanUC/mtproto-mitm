@@ -64,13 +64,14 @@ class TLObject(_BaseTLObject):
         return tl.SerializationUtils.read(stream, cls)
 
     def to_dict(self) -> dict:
+        result = {"_": self.tlname()}
+
         if not self.__tl_fields__:
-            return {}
+            return result
         for field in self.__tl_flags__:
             value = self._calculate_flags(field)
             setattr(self, field.name, value)
 
-        result = {}
         for field in self.__tl_fields__:
             result[field.name] = getattr(self, field.name)
 
