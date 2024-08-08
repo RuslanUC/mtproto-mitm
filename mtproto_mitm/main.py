@@ -1,5 +1,5 @@
 import json
-from asyncio import get_event_loop, gather
+from asyncio import get_event_loop
 from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -8,7 +8,7 @@ from time import time
 import click
 from socks5server import DataDirection, SocksServer, PasswordAuthentication, Socks5Client
 
-from mtproto_mitm.connection import PeekBytesIO, Connection
+from mtproto_mitm.connection import PeekBytesIO, Connection, IgnoredConn
 from mtproto_mitm.protocol import MTProto, MessageContainer
 
 
@@ -29,6 +29,7 @@ class MitmServer:
         self._sessions: dict[Socks5Client, list[MessageContainer]] = {}
         self._quiet = quiet
         self._output_dir = output_dir
+        self._output_dir.mkdir(parents=True, exist_ok=True)
 
         self._server.on_client_disconnected(self._on_disconnect)
         self._server.on_data(self._on_data)
@@ -39,7 +40,12 @@ class MitmServer:
     async def _on_data(self, client: Socks5Client, direction: DataDirection, data: bytes):
         stream = PeekBytesIO(data)
         if client not in self._clients:
-            self._clients[client] = Connection.new(stream)
+            try:
+                self._clients[client] = Connection.new(stream)
+            except AssertionError as e:
+                if not self._quiet:
+                    print(f"Protocol error: {e}")
+                self._clients[client] = IgnoredConn(), IgnoredConn()
             self._sessions[client] = []
 
         transport_in, transport_out = self._clients[client]

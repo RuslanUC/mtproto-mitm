@@ -16,7 +16,7 @@ class EncryptedMessage:
 
 
 class UnencryptedMessage:
-    __slots__ = ["message_id", "data"]
+    __slots__ = ("message_id", "data")
 
     def __init__(self, message_id: int, data: bytes):
         self.message_id = message_id
@@ -24,7 +24,7 @@ class UnencryptedMessage:
 
 
 class MessageMetadata:
-    __slots__ = ["auth_key_id", "message_id", "session_id", "salt", "seq_no", "msg_key"]
+    __slots__ = ("auth_key_id", "message_id", "session_id", "salt", "seq_no", "msg_key")
 
     def __init__(self, auth_key_id: int, message_id: int | None, session_id: int | None = None, salt: int | None = None,
                  seq_no: int | None = None, msg_key: bytes | None = None):
@@ -50,12 +50,16 @@ class MessageMetadata:
 
 
 class MessageContainer:
-    __slots__ = ["meta", "obj", "raw_data"]
+    __slots__ = ("meta", "obj", "raw_data", "raw_data_decrypted")
 
-    def __init__(self, meta: MessageMetadata, obj: TLObject | None, raw_data: bytes | None = None):
+    def __init__(
+            self, meta: MessageMetadata, obj: TLObject | None, raw_data: bytes | None = None,
+            raw_data_decrypted: bool = False
+    ):
         self.meta = meta
         self.obj = obj
         self.raw_data = raw_data
+        self.raw_data_decrypted = raw_data_decrypted
 
     def __repr__(self) -> str:
         return f"MessageContainer(meta={self.meta!r}, obj={self.obj!r})"
@@ -99,15 +103,22 @@ class MTProto:
     def read_object(cls, data: bytes, from_client: bool = True) -> MessageContainer:
         message = cls.read_message(data)
         if isinstance(message, UnencryptedMessage):
+            raw_data = message.data
+            try:
+                obj = TLObject.read(BytesIO(raw_data))
+                raw_data = None
+            except RuntimeError:
+                obj = None
+
             return MessageContainer(
                 MessageMetadata(0, message.message_id),
-                TLObject.read(BytesIO(message.data))
+                obj, raw_data, True
             )
         elif isinstance(message, EncryptedMessage):
             if message.auth_key_id not in cls._auth_keys:
                 return MessageContainer(
                     MessageMetadata(message.auth_key_id, None, msg_key=message.msg_key),
-                    None, message.data
+                    None, message.data, False
                 )
 
             aes_key, aes_iv = kdf(cls._auth_keys[message.auth_key_id], message.msg_key, from_client)
@@ -118,8 +129,15 @@ class MTProto:
             message_id = Long.read(decrypted)
             seq_no = Int.read(decrypted)
             message_data_length = Int.read(decrypted)
+            raw_data = decrypted.read(message_data_length)
+
+            try:
+                obj = TLObject.read(BytesIO(raw_data))
+                raw_data = None
+            except RuntimeError:
+                obj = None
 
             return MessageContainer(
                 MessageMetadata(message.auth_key_id, message_id, session_id, salt, seq_no),
-                TLObject.read(BytesIO(decrypted.read(message_data_length)))
+                obj, raw_data, True
             )

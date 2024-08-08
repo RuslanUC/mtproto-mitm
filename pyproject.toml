@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mtproto-mitm"
-version = "0.1.0b2"
+version = "0.1.0b3"
 description = "Telegram mtproto mitm server."
 authors = ["RuslanUC <dev_ruslan_uc@protonmail.com>"]
 readme = "README.md"
@@ -12,6 +12,7 @@ python = "^3.11"
 pysocks5server = "^0.1.0"
 tgcrypto = "^1.2.5"
 click = "^8.1.7"
+h11 = "^0.14.0"
 
 
 [build-system]

@@ -26,6 +26,17 @@ files = [
 ]
 
 [[package]]
+name = "h11"
+version = "0.14.0"
+description = "A pure-Python, bring-your-own-I/O implementation of HTTP/1.1"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "h11-0.14.0-py3-none-any.whl", hash = "sha256:e3fe4ac4b851c468cc8363d500db52c2ead036020723024a109d37346efaa761"},
+    {file = "h11-0.14.0.tar.gz", hash = "sha256:8f19fbbe99e72420ff35c00b27a34cb9937e902a8b810e2c88300c6f0a3b699d"},
+]
+
+[[package]]
 name = "pysocks5server"
 version = "0.1.0"
 description = "Simple socks5 proxy server"
@@ -104,4 +115,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "02abcedf8dd572d8440b952a6b9f2cf214b4aef00464c809af2028f1ae7f28ef"
+content-hash = "296f29ea3aa619bebf1bd8ffa1bd82e5b0b75b25591b679b7abd0156cea53167"

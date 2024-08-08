@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from io import BytesIO, SEEK_END
 from typing import Callable
 
+import h11
 import tgcrypto
 
 
@@ -77,6 +78,14 @@ class Connection(ABC):
             stream.read(1)
             assert (hd := stream.read(3)) == b"\xdd\xdd\xdd", f"Invalid TCP Intermediate header: {hd}"
             return TCPIntermediate(), TCPIntermediate()
+        elif stream.peek(4) == b"POST":
+            http_conn = h11.Connection(our_role=h11.SERVER)
+            http_conn.receive_data(stream.getvalue())
+            req = http_conn.next_event()
+            assert isinstance(req, h11.Request), f"Expected h11.Request, but got {req.__class__.__name__}"
+            data = http_conn.next_event()
+            assert isinstance(data, h11.Data), f"Expected h11.Data, but got {data.__class__.__name__}"
+            return Connection.new(PeekBytesIO(data.data))
         else:
             soon = stream.peek(8)
             if soon[-4:] == b"\0\0\0\0":
@@ -178,3 +187,8 @@ class TCPFull(Connection):
 
         self._last_length = None
         return payload
+
+
+class IgnoredConn(Connection):
+    def read(self, stream: PeekBytesIO | None = None) -> bytes | None:
+        return None
