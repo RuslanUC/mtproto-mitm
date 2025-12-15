@@ -6,9 +6,11 @@ from pathlib import Path
 from time import time
 
 import click
+from mtproto import ConnectionRole
+from mtproto.transport import Connection
+from mtproto.transport.packets import ErrorPacket, QuickAckPacket
 from socks5server import DataDirection, SocksServer, PasswordAuthentication, Socks5Client
 
-from mtproto_mitm.connection import PeekBytesIO, Connection, IgnoredConn
 from mtproto_mitm.protocol import MTProto, MessageContainer
 
 
@@ -22,8 +24,10 @@ class JsonEncoder(json.JSONEncoder):
 
 
 class MitmServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 1080, no_auth: bool = False, quiet: bool = False,
-                 output_dir: Path | None = None):
+    def __init__(
+            self, host: str = "0.0.0.0", port: int = 1080, no_auth: bool = False, quiet: bool = False,
+            output_dir: Path | None = None
+    ):
         self._server = SocksServer(host, port, no_auth)
         self._clients: dict[Socks5Client, tuple[Connection, Connection]] = {}
         self._sessions: dict[Socks5Client, list[MessageContainer]] = {}
@@ -37,63 +41,55 @@ class MitmServer:
     def set_proxy_users(self, users: dict[str, str]):
         self._server.register_authentication(0x02, PasswordAuthentication(users))
 
-    async def _on_data(self, client: Socks5Client, direction: DataDirection, data: bytes):
-        stream = PeekBytesIO(data)
+    async def _on_data(self, client: Socks5Client, direction: DataDirection, data: bytes) -> None:
         if client not in self._clients:
-            try:
-                self._clients[client] = Connection.new(stream)
-            except AssertionError as e:
-                if not self._quiet:
-                    print(f"Protocol error: {e}")
-                self._clients[client] = IgnoredConn(), IgnoredConn()
+            self._clients[client] = (Connection(role=ConnectionRole.SERVER), Connection(role=ConnectionRole.CLIENT))
             self._sessions[client] = []
 
-        transport_in, transport_out = self._clients[client]
+        if None in self._clients:
+            return
 
-        if direction == DataDirection.CLIENT_TO_DST:
-            if (data := transport_out.read(stream)) is None:
-                return
+        transport_to_server, transport_to_client = self._clients[client]
+        current = transport_to_server if direction == DataDirection.CLIENT_TO_DST else transport_to_client
+        receiver = transport_to_client if direction == DataDirection.CLIENT_TO_DST else transport_to_server
+        sender = ConnectionRole.CLIENT if direction == DataDirection.CLIENT_TO_DST else ConnectionRole.SERVER
 
-            obj = MTProto.read_object(data)
-            self._sessions[client].append(obj)
-            if not self._quiet:
-                print(f" -> {obj}")
-        else:
-            if (data := transport_in.read(stream)) is None:
-                return
+        current.data_received(data)
 
-            obj = MTProto.read_object(data, False)
-            self._sessions[client].append(obj)
-            if not self._quiet:
-                print(f" <- {obj}")
+        arrow = "->" if direction == DataDirection.CLIENT_TO_DST else "<-"
+        while (obj := current.next_event()) is not None:
+            if isinstance(obj, ErrorPacket):
+                if not self._quiet:
+                    print(f" {arrow} ERROR({obj.error_code})")
+            elif isinstance(obj, QuickAckPacket):
+                if not self._quiet:
+                    print(f" {arrow} QUICK_ACK({obj.token!r})")
+            elif (result := MTProto.read_object(obj, sender)) is None:
+                if not self._quiet:
+                    print(f" {arrow} UNKNOWN({obj!r}")
+            else:
+                self._sessions[client].append(result)
+                if not self._quiet:
+                    print(f" {arrow} {obj}")
 
-    async def _on_disconnect(self, client: Socks5Client):
+            receiver.send(obj)
+
+    async def _on_disconnect(self, client: Socks5Client) -> None:
         if client not in self._clients:
             return
         if client not in self._sessions:
             self._sessions[client] = []
 
-        transport_in, transport_out = self._clients[client]
-
-        while (data := transport_out.read()) is not None:
-            obj = MTProto.read_object(data)
-            self._sessions[client].append(obj)
-            if not self._quiet:
-                print(f" -> {obj}")
-
-        while (data := transport_in.read()) is not None:
-            obj = MTProto.read_object(data, False)
-            self._sessions[client].append(obj)
-            if not self._quiet:
-                print(f" <- {obj}")
+        await self._on_data(client, DataDirection.CLIENT_TO_DST, b"")
+        await self._on_data(client, DataDirection.DST_TO_CLIENT, b"")
 
         del self._clients[client]
         await self._save(client)
 
-    async def run_async(self):
+    async def run_async(self) -> None:
         await self._server.serve()
 
-    def _sync_save(self, messages: list[MessageContainer] | None):
+    def _sync_save(self, messages: list[MessageContainer] | None) -> None:
         if messages is None:
             return
 
@@ -116,14 +112,14 @@ class MitmServer:
         with open(self._output_dir / f"{int(time()*1000)}_{sid}.json", "w") as f:
             json.dump(messages_json, f, cls=JsonEncoder, indent=2)
 
-    async def _save(self, client: Socks5Client):
+    async def _save(self, client: Socks5Client) -> None:
         if not self._output_dir:
             return
 
         with ThreadPoolExecutor() as pool:
-            await get_event_loop().run_in_executor(pool, lambda: self._sync_save(self._sessions.pop(client, None)))
+            await get_event_loop().run_in_executor(pool, self._sync_save, self._sessions.pop(client, None))
 
-    def run(self):
+    def run(self) -> None:
         try:
             get_event_loop().run_until_complete(self.run_async())
         except KeyboardInterrupt:
