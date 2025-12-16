@@ -4,3 +4,4 @@ mtproto_mitm/tl/functions
 mtproto_mitm/tl/types
 mtproto_mitm/tl/all.py
 /keys.txt
+/dist

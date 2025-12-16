@@ -67,7 +67,8 @@ class MTProto:
             try:
                 obj = TLObject.read(BytesIO(raw_data))
                 raw_data = None
-            except RuntimeError:
+            except RuntimeError as e:
+                print(e)
                 obj = None
 
             return MessageContainer(
