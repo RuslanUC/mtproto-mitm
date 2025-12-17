@@ -23,7 +23,7 @@ pip install mtproto-mitm
 2. Get your telegram auth key:
     - Telethon or Pyrogram: you need session file and any sqlite reader. Open session file with sqlite reader and run "SELECT HEX(auth_key) FROM sessions;"
     - Telegram for Android (not Telegram X): you need root access. Copy tgnet.dat file from telegram directory (/data/data/\<package name\>/files/tgnet.dat) from your android device to your pc. Now you can use [tgnet](https://github.com/RuslanUC/tgnet) to extract key: use code from [example](https://github.com/RuslanUC/tgnet).
-    - Telegram Desktop: you can use [opentele](https://github.com/thedemons/opentele) to extract auth key from tdata folder.
+    - Telegram Desktop: you can use [opentele](https://github.com/thedemons/opentele) to extract auth key from tdata folder. From Telegram Desktop version 5 and newer, seems like Telegram uses exclusively temp auth keys that are generated at runtime and not stored anywhere; that means once you close Telegram Desktop application, you won't be able to access decryption keys, so you need to extract them from memory while Telegram is running, and only then start mtproto-mitm with those keys; also, note that temp keys work for at most 1 day (iirc) and even if you won't restart Telegram application, you'll need to extract keys again later. To extract keys from memory, you can use [tdesktop-keys-extract script](https://github.com/RuslanUC/tdesktop-keys-extract).
 3. Run MTProto-MITM:
 
     ```shell
