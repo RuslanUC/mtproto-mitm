@@ -86,3 +86,23 @@ class GzipPacked(TLObject):
         decompressed_stream = BytesIO(decompress(packed_data))
 
         return SerializationUtils.read(decompressed_stream, TLObject)
+
+
+@tl_object(id=0xae500895, name="FutureSalts")
+class FutureSalts(TLObject):
+    req_msg_id: int = TLField()
+    now: int = TLField()
+    salts: list[TLObject] = TLField()
+
+    @classmethod
+    def deserialize(cls, stream) -> TLObject:
+        req_msg_id = SerializationUtils.read(stream, Long)
+        now = SerializationUtils.read(stream, Int)
+
+        count = SerializationUtils.read(stream, Int)
+        salts = []
+
+        for _ in range(count):
+            salts.append(tl.types.FutureSalt.deserialize(stream))
+
+        return FutureSalts(req_msg_id=req_msg_id, now=now, salts=salts)

@@ -23,6 +23,8 @@ from functools import partial
 from pathlib import Path
 from typing import NamedTuple, List, Tuple
 
+# TODO: use tl from piltover (https://github.com/RuslanUC/piltover)
+
 HOME_PATH = Path("./tools/compiler")
 DESTINATION_PATH = Path("mtproto_mitm/tl")
 
@@ -159,9 +161,7 @@ def parse_schema(schema: list[str]) -> tuple[list[Combinator], int]:
             for i, item in enumerate(args):
                 if item[0] == "self":
                     args[i] = ("is_self", item[1])
-                elif item[0] == "from":
-                    args[i] = ("from_", item[1])
-                elif item[0] in ("bytes", "str", "type"):
+                elif item[0] in ("from", "bytes", "str", "type", "list"):
                     args[i] = (f"{item[0]}_", item[1])
 
             combinator = Combinator(
@@ -379,6 +379,7 @@ def start():
         f.write(f'\n    0x73f1f8dc: core_types.MsgContainer,')
         f.write(f'\n    0xf35c6d01: core_types.RpcResult,')
         f.write(f'\n    0x3072cfa1: core_types.GzipPacked,')
+        f.write(f'\n    0xae500895: core_types.FutureSalts,')
 
         f.write("\n}\n")
 

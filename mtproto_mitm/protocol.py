@@ -7,7 +7,15 @@ from mtproto.transport.packets import MessagePacket, UnencryptedMessagePacket, E
 from mtproto_mitm.tl import TLObject
 
 
-class MessageMetadata:
+class AutoRepr:
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        fields = ", ".join([f"{slot}={getattr(self, slot)!r}" for slot in self.__slots__])
+        return f"{self.__class__.__name__}({fields})"
+
+
+class MessageMetadata(AutoRepr):
     __slots__ = ("auth_key_id", "message_id", "session_id", "salt", "seq_no", "msg_key")
 
     def __init__(
@@ -21,21 +29,7 @@ class MessageMetadata:
         self.seq_no = seq_no
         self.msg_key = msg_key
 
-    def __repr__(self) -> str:
-        attrs = {}
-        for attr in self.__slots__:
-            value = getattr(self, attr)
-            if value is None:
-                continue
-            attrs[attr] = value
-
-        attrs = [f"{key}={value!r}" for key, value in attrs.items()]
-        attrs = ", ".join(attrs)
-
-        return f"MessageMetadata({attrs})"
-
-
-class MessageContainer:
+class MessageContainer(AutoRepr):
     __slots__ = ("meta", "obj", "raw_data", "raw_data_decrypted")
 
     def __init__(
@@ -46,9 +40,6 @@ class MessageContainer:
         self.obj = obj
         self.raw_data = raw_data
         self.raw_data_decrypted = raw_data_decrypted
-
-    def __repr__(self) -> str:
-        return f"MessageContainer(meta={self.meta!r}, obj={self.obj!r})"
 
 
 class MTProto:
@@ -97,7 +88,8 @@ class MTProto:
             try:
                 obj = TLObject.read(BytesIO(raw_data))
                 raw_data = None
-            except RuntimeError:
+            except RuntimeError as e:
+                print(e)
                 obj = None
 
             return MessageContainer(
