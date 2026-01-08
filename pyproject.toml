@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mtproto-mitm"
-version = "0.2.1"
+version = "0.2.2"
 description = "Telegram mtproto mitm server."
 authors = ["RuslanUC <dev_ruslan_uc@protonmail.com>"]
 readme = "README.md"
@@ -11,7 +11,11 @@ include = ["mtproto_mitm/**/*.py"]
 python = "^3.11"
 pysocks5server = "^0.1.0"
 click = "^8.3.1"
-mtproto = {git = "https://github.com/RuslanUC/mtproto", extras = ["tgcrypto", "http"]}
+mtproto = { version = "^0.2.1", extras = ["tgcrypto", "http"] }
+watchfiles = { version = "^1.1.1", optional = true }
+
+[tool.poetry.extras]
+keys-reload = ["watchfiles"]
 
 
 [build-system]
