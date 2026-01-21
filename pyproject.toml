@@ -1,15 +1,20 @@
 [tool.poetry]
 name = "mtproto-mitm"
-version = "0.2.2"
+version = "0.2.3"
 description = "Telegram mtproto mitm server."
 authors = ["RuslanUC <dev_ruslan_uc@protonmail.com>"]
 readme = "README.md"
-packages = [{include = "mtproto_mitm"}]
-include = ["mtproto_mitm/**/*.py"]
+packages = [
+    { include = "mtproto_mitm" }
+]
+include = [
+    { path = "mtproto_mitm/**/*.py", format = "wheel" },
+    { path = "tools", format = "sdist" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-pysocks5server = "^0.1.0"
+pysocks5server = "^0.1.2"
 click = "^8.3.1"
 mtproto = { version = "^0.2.1", extras = ["tgcrypto", "http"] }
 watchfiles = { version = "^1.1.1", optional = true }

@@ -317,4 +317,4 @@ keys-reload = ["watchfiles"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "d1ccb9d4a99e953441f51a0291516b64bb71643580688fefcd96f270851c0039"
+content-hash = "cd57e47b3c6d1fe27edbe98436fa0266c2aa007c9566595d890968ee9e420f76"
