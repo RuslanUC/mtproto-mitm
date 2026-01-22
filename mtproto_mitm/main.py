@@ -1,9 +1,9 @@
-import hashlib
 import json
+import logging
+import os
 from asyncio import get_running_loop, get_event_loop
 from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
-from io import BytesIO
 from pathlib import Path
 from threading import Event
 from time import time
@@ -11,13 +11,13 @@ from time import time
 import click
 from mtproto import ConnectionRole
 from mtproto.transport import Connection
-from mtproto.transport.packets import ErrorPacket, QuickAckPacket, BasePacket, MessagePacket, UnencryptedMessagePacket, \
-    EncryptedMessagePacket
-from socks5server import DataDirection, SocksServer, PasswordAuthentication, Socks5Client
-from socks5server.enums import AuthMethod, DataModify
+from mtproto.transport.packets import ErrorPacket, QuickAckPacket, BasePacket
+from socks5server import DataDirection, Socks5Client
 
-from mtproto_mitm.messages import MessageContainer, MessageMetadata
-from mtproto_mitm.tl import TLObject
+from mtproto_mitm.messages import MessageContainer
+from mtproto_mitm.server import MitmServer
+
+_save_executor = ThreadPoolExecutor(max_workers=os.cpu_count() * 2, thread_name_prefix="SaveWorker")
 
 
 class JsonEncoder(json.JSONEncoder):
@@ -37,81 +37,48 @@ class ConnectionPair:
         self.to_client: Connection = Connection(ConnectionRole.CLIENT)
 
 
-class MitmServer:
+class MitmCli:
     def __init__(
             self, host: str = "0.0.0.0", port: int = 1080, no_auth: bool = False, quiet: bool = False,
             output_dir: Path | None = None,
     ):
-        self._server = SocksServer(host, port, no_auth)
-        self._clients: dict[Socks5Client, ConnectionPair] = {}
+        self.server = MitmServer(host, port, no_auth)
         self._sessions: dict[Socks5Client, list[MessageContainer]] = {}
         self._quiet = quiet
         self._output_dir = output_dir
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        self._auth_keys = {}
 
-        self._server.on_client_disconnected(self._on_disconnect)
-        self._server.on_data_modify(self._on_data)
+        self.server.add_client_connected_handler(self._on_connect)
+        self.server.add_client_disconnected_handler(self._on_disconnect)
+        self.server.add_packet_handler(self._on_packet)
 
-    def set_proxy_users(self, users: dict[str, str]):
-        self._server.register_authentication(AuthMethod.PASSWORD, PasswordAuthentication(users))
-
-    def _handle_packet(self, client: Socks5Client, packet: BasePacket, direction: DataDirection) -> None:
-        sender = ConnectionRole.CLIENT if direction is DataDirection.CLIENT_TO_DST else ConnectionRole.SERVER
-        arrow = "->" if direction is DataDirection.CLIENT_TO_DST else "<-"
-
-        message = None
-        if isinstance(packet, MessagePacket):
-            message = self._parse_data_packet(packet, sender)
-
-        if isinstance(packet, ErrorPacket):
-            if not self._quiet:
-                print(f" {arrow} ERROR({packet.error_code})")
-        elif isinstance(packet, QuickAckPacket):
-            if not self._quiet:
-                print(f" {arrow} QUICK_ACK({packet.token!r})")
-        elif message is None:
-            if not self._quiet:
-                print(f" {arrow} UNKNOWN({packet!r}")
-        else:
-            self._sessions[client].append(message)
-            if not self._quiet:
-                print(f" {arrow} {message}")
-
-    async def _on_data(self, client: Socks5Client, direction: DataDirection, data: bytes) -> DataModify | None:
-        if client not in self._clients:
-            self._clients[client] = ConnectionPair()
-            self._sessions[client] = []
-
-        conn = self._clients[client]
-
-        current = conn.to_server if direction is DataDirection.CLIENT_TO_DST else conn.to_client
-        receiver = conn.to_client if direction is DataDirection.CLIENT_TO_DST else conn.to_server
-
-        current.data_received(data)
-
-        to_send = b""
-
-        while (packet := current.next_event()) is not None:
-            self._handle_packet(client, packet, direction)
-            to_send += receiver.send(packet)
-
-        return to_send
+    async def _on_connect(self, client: Socks5Client) -> None:
+        self._sessions[client] = []
 
     async def _on_disconnect(self, client: Socks5Client) -> None:
-        if client not in self._clients:
-            return
-        if client not in self._sessions:
-            self._sessions[client] = []
-
-        await self._on_data(client, DataDirection.CLIENT_TO_DST, b"")
-        await self._on_data(client, DataDirection.DST_TO_CLIENT, b"")
-
-        del self._clients[client]
         await self._save(client)
+        del self._sessions[client]
 
-    async def run_async(self) -> None:
-        await self._server.serve()
+    async def _on_packet(
+            self, client: Socks5Client, direction: DataDirection, data: BasePacket | MessageContainer
+    ) -> None:
+        if isinstance(data, MessageContainer):
+            self._sessions[client].append(data)
+
+        if self._quiet:
+            return
+
+        arrow = "->" if direction is DataDirection.CLIENT_TO_DST else "<-"
+
+        if isinstance(data, MessageContainer):
+            self._sessions[client].append(data)
+            print(f" {arrow} {data}")
+        elif isinstance(data, ErrorPacket):
+            print(f" {arrow} ERROR({data.error_code})")
+        elif isinstance(data, QuickAckPacket):
+            print(f" {arrow} QUICK_ACK({data.token!r})")
+        else:
+            print(f" {arrow} UNKNOWN({data!r}")
 
     def _sync_save(self, messages: list[MessageContainer] | None) -> None:
         if messages is None:
@@ -130,6 +97,7 @@ class MitmServer:
                 },
                 "object": message.obj.to_dict() if message.obj is not None else None,
                 "raw_data": b64encode(message.raw_data) if message.raw_data is not None else None,
+                "raw_data_decrypted": message.raw_data_decrypted,
             })
 
         sid = hex(messages_json[-1]["metadata"]["session_id"] or 0)[2:6] if messages_json else "0000"
@@ -140,87 +108,7 @@ class MitmServer:
         if not self._output_dir:
             return
 
-        with ThreadPoolExecutor() as pool:
-            await get_running_loop().run_in_executor(pool, self._sync_save, self._sessions.pop(client, None))
-
-    def run(self) -> None:
-        try:
-            get_event_loop().run_until_complete(self.run_async())
-        except KeyboardInterrupt:
-            pass
-
-        if not self._output_dir:
-            return
-
-        if not self._quiet:
-            print("Saving sessions...")
-
-        for client in list(self._sessions.keys()):
-            self._sync_save(self._sessions.pop(client, None))
-
-    def register_key(self, auth_key: bytes) -> None:
-        auth_key_hash = hashlib.sha1(auth_key).digest()[-8:]
-        auth_key_id = int.from_bytes(auth_key_hash, byteorder="little")
-        self._auth_keys[auth_key_id] = auth_key
-
-    def clear_keys(self) -> None:
-        self._auth_keys.clear()
-
-    def _parse_data_packet(self, message: MessagePacket, sender: ConnectionRole) -> MessageContainer:
-        if isinstance(message, UnencryptedMessagePacket):
-            raw_data = message.message_data
-            try:
-                obj = TLObject.read(BytesIO(raw_data))
-                raw_data = None
-            except RuntimeError as e:
-                print(e)
-                obj = None
-
-            return MessageContainer(
-                meta=MessageMetadata(0, message.message_id),
-                obj=obj,
-                raw_data=raw_data,
-                raw_data_decrypted=True,
-            )
-
-        if isinstance(message, EncryptedMessagePacket):
-            failed_to_decrypt_result = MessageContainer(
-                meta=MessageMetadata(message.auth_key_id, None, msg_key=message.message_key),
-                obj=None,
-                raw_data=message.encrypted_data,
-                raw_data_decrypted=False,
-            )
-
-            if message.auth_key_id not in self._auth_keys:
-                return failed_to_decrypt_result
-
-            try:
-                decrypted = message.decrypt(self._auth_keys[message.auth_key_id], sender)
-            except ValueError:
-                return failed_to_decrypt_result
-
-            raw_data = decrypted.data
-            try:
-                obj = TLObject.read(BytesIO(raw_data))
-                raw_data = None
-            except RuntimeError as e:
-                print(e)
-                obj = None
-
-            return MessageContainer(
-                meta=MessageMetadata(
-                    auth_key_id=message.auth_key_id,
-                    message_id=decrypted.message_id,
-                    session_id=decrypted.session_id,
-                    salt=decrypted.salt,
-                    seq_no=decrypted.seq_no,
-                ),
-                obj=obj,
-                raw_data=raw_data,
-                raw_data_decrypted=True,
-            )
-
-        raise RuntimeError("Unreachable")
+        await get_running_loop().run_in_executor(_save_executor, self._sync_save, self._sessions[client])
 
 
 async def _watch_keys_file(keys_file: str, server: MitmServer, stop: Event, quiet: bool) -> None:
@@ -252,6 +140,7 @@ async def _watch_keys_file(keys_file: str, server: MitmServer, stop: Event, quie
 @click.option("--key", "-k", type=click.STRING, multiple=True, help="Hex-encoded telegram auth key.")
 @click.option("--keys-file", "-f", type=click.STRING, default=None, help="File with telegram auth keys.")
 @click.option("--quiet", "-q", is_flag=True, default=False, help="Do not show requests in real time.")
+@click.option("--verbose", "-v", count=True, help="Enable verbose logging.")
 @click.option("--output", "-o", type=click.STRING, default=None,
               help="Directory to which mtproto requests will be saved.")
 @click.option("--proxy-no-auth", is_flag=True, default=False, help="Disable authentication for proxy.")
@@ -259,12 +148,23 @@ async def _watch_keys_file(keys_file: str, server: MitmServer, stop: Event, quie
 @click.option("--reload-keys", is_flag=True, default=False, help="Enable reloading keys from file.")
 def main(
         host: str, port: int, key: list[str], keys_file: str, quiet: bool, output: str | None, proxy_no_auth: bool,
-        proxy_user: list[str], reload_keys: bool,
+        proxy_user: list[str], reload_keys: bool, verbose: int,
 ) -> None:
-    if not quiet:
-        print("Running...")
+    if verbose >= 3:
+        logging.basicConfig(level=logging.DEBUG)
+        if verbose == 3:
+            logging.getLogger("asyncio").setLevel(logging.WARNING)
+            logging.getLogger("mtproto").setLevel(logging.WARNING)
+    elif verbose >= 2:
+        logging.basicConfig(level=logging.INFO)
+    elif verbose >= 1:
+        logging.basicConfig(level=logging.WARNING)
 
-    server = MitmServer(host, port, proxy_no_auth, quiet, Path(output) if output is not None else None)
+    if not quiet:
+        print("Starting mtproto-mitm...")
+
+    cli = MitmCli(host, port, proxy_no_auth, quiet, Path(output) if output is not None else None)
+    server = cli.server
 
     for k in key:
         server.register_key(bytes.fromhex(k))
@@ -284,6 +184,9 @@ def main(
 
     if proxy_user:
         server.set_proxy_users({login: password for user in proxy_user for login, password in [user.split(":")]})
+
+    if not quiet:
+        print("Running...")
 
     server.run()
 
